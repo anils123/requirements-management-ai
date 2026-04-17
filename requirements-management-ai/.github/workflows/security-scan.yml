@@ -1,0 +1,13 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run security scanner
+        run: echo "Add security scanning steps (Snyk/Trivy)"
