@@ -1,4 +1,4 @@
-cat > cdk/lib/requirements-management-stack.ts << 'EOF'
+
 import * as cdk from 'aws-cdk-lib';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as opensearch from 'aws-cdk-lib/aws-opensearchserverless';
@@ -126,4 +126,4 @@ export class RequirementsManagementStack extends cdk.Stack {
               ],
               resources: ['*'],
             }),
-          ],
+          ]

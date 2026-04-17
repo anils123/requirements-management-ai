@@ -1,5 +1,5 @@
-cat > cdk/bin/requirements-management.ts << 'EOF'
-#!/usr/bin/env node
+
+
 import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { RequirementsManagementStack } from '../lib/requirements-management-stack';
@@ -15,4 +15,3 @@ new RequirementsManagementStack(app, 'RequirementsManagementStack', {
   env,
   description: 'Requirements Management AI System Infrastructure',
 });
-EOF
