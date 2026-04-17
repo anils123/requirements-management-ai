@@ -1,3 +1,36 @@
+// config/development.json
 {
-  "env": "development"
+  "environment": "development",
+  "aws": {
+    "region": "us-east-1",
+    "account_id": "123456789012"
+  },
+  "bedrock": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "embedding_model": "amazon.titan-embed-text-v2:0",
+    "max_tokens": 4000,
+    "temperature": 0.1
+  },
+  "database": {
+    "cluster_name": "requirements-dev-cluster",
+    "database_name": "requirements_db",
+    "vector_dimensions": 1536
+  },
+  "search": {
+    "collection_name": "requirements-search-dev",
+    "hybrid_search_enabled": true,
+    "semantic_cache_ttl": 1800,
+    "max_results": 20,
+    "similarity_threshold": 0.7
+  },
+  "lambda": {
+    "timeout": 900,
+    "memory_size": 3008,
+    "runtime": "python3.11"
+  },
+  "monitoring": {
+    "log_level": "DEBUG",
+    "enable_xray": true,
+    "metrics_namespace": "RequirementsManagement/Dev"
+  }
 }
