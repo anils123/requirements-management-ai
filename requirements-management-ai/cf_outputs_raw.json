@@ -1,0 +1,87 @@
+[
+    {
+        "OutputKey": "DbClusterArn",
+        "OutputValue": "arn:aws:rds:us-east-1:672996977856:cluster:requirementsmanagementstack-vectordatabase3f35b757-1puh70gvsblh"
+    },
+    {
+        "OutputKey": "DocumentBucketName",
+        "OutputValue": "requirementsmanagementstack-documentbucketae41e5a9-v7g01d4l2urm"
+    },
+    {
+        "OutputKey": "ExpertMatcherArn",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementStack-ExpertMatcher5B93BAF4-Kfndzrbn0BDx"
+    },
+    {
+        "OutputKey": "OpenSearchEndpoint",
+        "OutputValue": "https://kfq8g12q68gbewrmlp4c.us-east-1.aoss.amazonaws.com"
+    },
+    {
+        "OutputKey": "ExportsOutputRefRequirementsVPCPrivateSubnet1Subnet1F9CBE96AADA6416",
+        "OutputValue": "subnet-061a23b2d562e3328",
+        "ExportName": "RequirementsManagementStack:ExportsOutputRefRequirementsVPCPrivateSubnet1Subnet1F9CBE96AADA6416"
+    },
+    {
+        "OutputKey": "ApiEndpoint",
+        "OutputValue": "https://sn658v4d1m.execute-api.us-east-1.amazonaws.com/v1/"
+    },
+    {
+        "OutputKey": "ExportsOutputFnGetAttSearchCollectionArn06B8D4AB",
+        "OutputValue": "arn:aws:aoss:us-east-1:672996977856:collection/kfq8g12q68gbewrmlp4c",
+        "ExportName": "RequirementsManagementStack:ExportsOutputFnGetAttSearchCollectionArn06B8D4AB"
+    },
+    {
+        "OutputKey": "ExportsOutputFnGetAttRequirementsExtractor1D9D339DArn071BCA67",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementSta-RequirementsExtractor1D9-uZTylX0rYPcR",
+        "ExportName": "RequirementsManagementStack:ExportsOutputFnGetAttRequirementsExtractor1D9D339DArn071BCA67"
+    },
+    {
+        "OutputKey": "RequirementsExtractorArn",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementSta-RequirementsExtractor1D9-uZTylX0rYPcR"
+    },
+    {
+        "OutputKey": "ExportsOutputRefRequirementsVPC2683C35645D1EA59",
+        "OutputValue": "vpc-089568a1489894ed4",
+        "ExportName": "RequirementsManagementStack:ExportsOutputRefRequirementsVPC2683C35645D1EA59"
+    },
+    {
+        "OutputKey": "ExportsOutputFnGetAttDocumentProcessor3D49A083ArnB97F8912",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementSta-DocumentProcessor3D49A08-kKbHVGTb1bVQ",
+        "ExportName": "RequirementsManagementStack:ExportsOutputFnGetAttDocumentProcessor3D49A083ArnB97F8912"
+    },
+    {
+        "OutputKey": "DbSecretArn",
+        "OutputValue": "arn:aws:secretsmanager:us-east-1:672996977856:secret:RequirementsManagementStack-uEpN70J2Wx5n-KmDmDi"
+    },
+    {
+        "OutputKey": "ComplianceCheckerArn",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementSta-ComplianceChecker2535BFD-1gINwrKjtd0P"
+    },
+    {
+        "OutputKey": "ExportsOutputFnGetAttComplianceChecker2535BFDEArn495A0EBA",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementSta-ComplianceChecker2535BFD-1gINwrKjtd0P",
+        "ExportName": "RequirementsManagementStack:ExportsOutputFnGetAttComplianceChecker2535BFDEArn495A0EBA"
+    },
+    {
+        "OutputKey": "DocumentProcessorArn",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementSta-DocumentProcessor3D49A08-kKbHVGTb1bVQ"
+    },
+    {
+        "OutputKey": "ExportsOutputFnGetAttDocumentBucketAE41E5A9ArnF6A03022",
+        "OutputValue": "arn:aws:s3:::requirementsmanagementstack-documentbucketae41e5a9-v7g01d4l2urm",
+        "ExportName": "RequirementsManagementStack:ExportsOutputFnGetAttDocumentBucketAE41E5A9ArnF6A03022"
+    },
+    {
+        "OutputKey": "ExportsOutputFnGetAttExpertMatcher5B93BAF4Arn3050FEA4",
+        "OutputValue": "arn:aws:lambda:us-east-1:672996977856:function:RequirementsManagementStack-ExpertMatcher5B93BAF4-Kfndzrbn0BDx",
+        "ExportName": "RequirementsManagementStack:ExportsOutputFnGetAttExpertMatcher5B93BAF4Arn3050FEA4"
+    },
+    {
+        "OutputKey": "RequirementsApiEndpointF7F3ECEE",
+        "OutputValue": "https://sn658v4d1m.execute-api.us-east-1.amazonaws.com/v1/"
+    },
+    {
+        "OutputKey": "ExportsOutputRefRequirementsVPCPrivateSubnet2Subnet31E634F630275D8F",
+        "OutputValue": "subnet-0f6f1d6b297897062",
+        "ExportName": "RequirementsManagementStack:ExportsOutputRefRequirementsVPCPrivateSubnet2Subnet31E634F630275D8F"
+    }
+]

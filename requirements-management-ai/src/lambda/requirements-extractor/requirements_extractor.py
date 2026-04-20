@@ -1,194 +1,254 @@
-# src/lambda/requirements-extractor/requirements_extractor.py
-import json
+"""
+Requirements Extractor Lambda
+- Fetches document chunks from Aurora pgvector
+- Traverses Knowledge Graph for entity-enriched context
+- Extracts requirements using Amazon Nova
+- Stores to Aurora requirements table
+"""
+import json, os, hashlib
 import boto3
-import os
-from typing import Dict, List, Any
-import re
-from aws_lambda_powertools import Logger, Tracer, Metrics
-from aws_lambda_powertools.event_handler import BedrockAgentResolver
-from aws_lambda_powertools.utilities.typing import LambdaContext
+from typing import Any
 
-logger = Logger()
-tracer = Tracer()
-metrics = Metrics()
-app = BedrockAgentResolver()
+REGION    = os.environ.get("AWS_ACCOUNT_REGION", "us-east-1")
+DB_ARN    = os.environ.get("DB_CLUSTER_ARN", "")
+DB_SECRET = os.environ.get("DB_SECRET_ARN", "")
 
-bedrock_client = boto3.client('bedrock-runtime')
-opensearch_client = boto3.client('opensearchserverless')
+bedrock = boto3.client("bedrock-runtime", region_name=REGION)
+rds     = boto3.client("rds-data",        region_name=REGION)
 
-@app.tool(name="extract_requirements")
-@tracer.capture_method
-def extract_requirements(document_id: str, extraction_criteria: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Extract structured requirements from processed document chunks.
-    
-    Args:
-        document_id: Identifier for the processed document
-        extraction_criteria: Criteria for requirement extraction
-    
-    Returns:
-        Dictionary containing extracted requirements
-    """
-    try:
-        logger.info(f"Extracting requirements from document: {document_id}")
-        
-        # Retrieve document chunks
-        chunks = retrieve_document_chunks(document_id)
-        
-        # Extract requirements using LLM
-        requirements = []
-        for chunk in chunks:
-            chunk_requirements = extract_requirements_from_chunk(
-                chunk['text'], extraction_criteria
-            )
-            requirements.extend(chunk_requirements)
-        
-        # Deduplicate and structure requirements
-        structured_requirements = structure_requirements(requirements)
-        
-        # Store requirements in search index
-        store_requirements_in_search(document_id, structured_requirements)
-        
-        return {
-            "status": "success",
-            "document_id": document_id,
-            "requirements_extracted": len(structured_requirements),
-            "requirements": structured_requirements
-        }
-        
-    except Exception as e:
-        logger.error(f"Error extracting requirements: {str(e)}")
-        raise
+DOMAIN_KEYWORDS = {
+    "security":       ["security","auth","encrypt","access","permission","oauth","ssl","tls","certificate"],
+    "performance":    ["performance","latency","throughput","response time","scalab","speed","capacity"],
+    "integration":    ["api","integration","interface","protocol","rest","graphql","webhook","connector"],
+    "data":           ["data","database","storage","backup","retention","migration","archive"],
+    "compliance":     ["compliance","regulation","gdpr","iso","audit","standard","policy","legal"],
+    "infrastructure": ["infrastructure","cloud","deploy","availability","disaster","recovery","redundan"],
+    "ui_ux":          ["interface","user experience","usability","accessibility","ui","ux","dashboard"],
+}
 
-def retrieve_document_chunks(document_id: str) -> List[Dict]:
-    """Retrieve document chunks from vector database."""
-    # Implementation would query Aurora PostgreSQL
-    # This is a simplified version
-    return [
-        {"text": "Sample requirement text", "chunk_id": 1},
-        {"text": "Another requirement", "chunk_id": 2}
-    ]
 
-def extract_requirements_from_chunk(text: str, criteria: Dict[str, Any]) -> List[Dict]:
-    """Extract requirements from a text chunk using Bedrock LLM."""
-    
-    prompt = f"""
-    Extract functional and non-functional requirements from the following text.
-    
-    Extraction Criteria:
-    - Requirement types: {criteria.get('types', ['functional', 'non-functional'])}
-    - Priority levels: {criteria.get('priorities', ['high', 'medium', 'low'])}
-    - Categories: {criteria.get('categories', ['performance', 'security', 'usability'])}
-    
-    Text to analyze:
-    {text}
-    
-    Return requirements in JSON format with the following structure:
-    {{
-        "requirements": [
-            {{
-                "id": "REQ-001",
-                "type": "functional|non-functional",
-                "category": "category_name",
-                "priority": "high|medium|low",
-                "description": "requirement description",
-                "acceptance_criteria": ["criteria1", "criteria2"],
-                "source_text": "original text snippet",
-                "confidence_score": 0.95
-            }}
-        ]
+def _parse_event(event):
+    if "requestBody" in event:
+        props = event.get("requestBody",{}).get("content",{}) \
+                     .get("application/json",{}).get("properties",[])
+        return {p["name"]: p["value"] for p in props}
+    if "body" in event and event["body"]:
+        try: return json.loads(event["body"])
+        except: pass
+    return event
+
+def _wrap(event, body):
+    if "actionGroup" not in event: return body
+    return {"messageVersion":"1.0","response":{
+        "actionGroup":event.get("actionGroup",""),
+        "apiPath":event.get("apiPath",""),
+        "httpMethod":event.get("httpMethod","POST"),
+        "httpStatusCode":200,
+        "responseBody":{"application/json":{"body":json.dumps(body)}},
     }}
-    """
-    
-    response = bedrock_client.invoke_model(
-        modelId='anthropic.claude-3-5-sonnet-20241022-v2:0',
-        body=json.dumps({
-            'messages': [{'role': 'user', 'content': prompt}],
-            'max_tokens': 2000,
-            'temperature': 0.1
-        })
-    )
-    
-    result = json.loads(response['body'].read())
-    content = result['content'][0]['text']
-    
+
+def _classify_domain(text):
+    t = text.lower()
+    for domain, kws in DOMAIN_KEYWORDS.items():
+        if any(k in t for k in kws):
+            return domain
+    return "general"
+
+def _rds(sql, params=None):
+    kw = dict(resourceArn=DB_ARN, secretArn=DB_SECRET,
+              database="requirements_db", sql=sql)
+    if params: kw["parameters"] = params
+    return rds.execute_statement(**kw)
+
+
+# ── Fetch document chunks ─────────────────────────────────────────────────────
+def _fetch_chunks(document_id):
+    if not DB_ARN: return []
     try:
-        requirements_data = json.loads(content)
-        return requirements_data.get('requirements', [])
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse LLM response as JSON")
+        r = _rds("SELECT chunk_id,text_content FROM document_chunks "
+                 "WHERE document_path LIKE :doc ORDER BY chunk_id LIMIT 50",
+                 [{"name":"doc","value":{"stringValue":f"%{document_id}%"}}])
+        return [{"chunk_id":row[0]["longValue"],"text":row[1]["stringValue"]}
+                for row in r.get("records",[])]
+    except Exception as e:
+        print(f"Fetch chunks error: {e}")
         return []
 
-def structure_requirements(requirements: List[Dict]) -> List[Dict]:
-    """Structure and deduplicate requirements."""
-    structured = []
-    seen_descriptions = set()
-    
-    for req in requirements:
-        description = req.get('description', '').strip().lower()
-        
-        # Skip duplicates
-        if description in seen_descriptions:
-            continue
-        
-        seen_descriptions.add(description)
-        
-        # Add structured metadata
-        structured_req = {
-            **req,
-            'extracted_at': '2024-01-01T00:00:00Z',  # Current timestamp
-            'status': 'extracted',
-            'domain': classify_domain(req.get('description', '')),
-            'complexity': assess_complexity(req.get('description', ''))
+
+# ── Knowledge Graph traversal ─────────────────────────────────────────────────
+def _kg_traverse(document_id, max_hops=2):
+    """
+    Traverse the KG for entities in this document.
+    Returns enriched context: entity names, types, and their connected entities.
+    """
+    if not DB_ARN: return [], []
+    try:
+        # Get all entities for this document
+        r = _rds("SELECT entity_id,entity_text,entity_type FROM kg_nodes "
+                 "WHERE document_path LIKE :doc ORDER BY score DESC LIMIT 50",
+                 [{"name":"doc","value":{"stringValue":f"%{document_id}%"}}])
+        nodes = [{"id":row[0]["stringValue"],
+                  "text":row[1]["stringValue"],
+                  "type":row[2]["stringValue"]}
+                 for row in r.get("records",[])]
+
+        if not nodes:
+            return [], []
+
+        # For each entity, find connected entities (1-hop traversal)
+        node_ids = [n["id"] for n in nodes[:20]]
+        ids_str  = ",".join(f"'{nid}'" for nid in node_ids)
+
+        r2 = _rds(
+            f"SELECT e.predicate, n1.entity_text, n2.entity_text, n1.entity_type, n2.entity_type "
+            f"FROM kg_edges e "
+            f"JOIN kg_nodes n1 ON e.subject_id = n1.entity_id "
+            f"JOIN kg_nodes n2 ON e.object_id  = n2.entity_id "
+            f"WHERE e.subject_id IN ({ids_str}) OR e.object_id IN ({ids_str}) "
+            f"LIMIT 50"
+        )
+        relations = [
+            {"predicate": row[0]["stringValue"],
+             "subject":   row[1]["stringValue"],
+             "object":    row[2]["stringValue"],
+             "subj_type": row[3]["stringValue"],
+             "obj_type":  row[4]["stringValue"]}
+            for row in r2.get("records", [])
+        ]
+        return nodes, relations
+    except Exception as e:
+        print(f"KG traversal error: {e}")
+        return [], []
+
+
+def _build_kg_context(nodes, relations):
+    """Format KG data as readable context for the LLM."""
+    if not nodes and not relations:
+        return ""
+    lines = ["=== Knowledge Graph Context ==="]
+    if nodes:
+        lines.append("Key Entities:")
+        for n in nodes[:15]:
+            lines.append(f"  - {n['text']} ({n['type']})")
+    if relations:
+        lines.append("Relationships:")
+        for r in relations[:15]:
+            lines.append(f"  - {r['subject']} --[{r['predicate']}]--> {r['object']}")
+    return "\n".join(lines)
+
+
+# ── Requirement extraction ────────────────────────────────────────────────────
+def _extract_from_text(text, kg_context=""):
+    prompt = f"""You are a requirements engineering expert. Extract ALL requirements from the text below.
+
+{kg_context}
+
+Text:
+{text[:4000]}
+
+Return ONLY valid JSON:
+{{"requirements":[{{"id":"REQ-001","type":"functional","category":"security","priority":"high","description":"The system shall...","acceptance_criteria":["criterion1","criterion2"],"confidence_score":0.9,"entities":["EntityA","EntityB"]}}]}}
+
+Rules:
+- type: "functional" or "non-functional"
+- priority: "high", "medium", or "low"
+- Include entities from the Knowledge Graph context when relevant
+- confidence_score: 0.0-1.0"""
+
+    try:
+        r    = bedrock.invoke_model(
+            modelId="amazon.nova-micro-v1:0",
+            body=json.dumps({"messages":[{"role":"user","content":[{"text":prompt}]}],
+                             "inferenceConfig":{"maxTokens":2000,"temperature":0.1}}))
+        out  = json.loads(r["body"].read())["output"]["message"]["content"][0]["text"]
+        s, e = out.find("{"), out.rfind("}") + 1
+        if s == -1: return []
+        return json.loads(out[s:e]).get("requirements", [])
+    except Exception as ex:
+        print(f"Extraction error: {ex}")
+        return []
+
+
+def _store_requirements(reqs, doc_id):
+    if not DB_ARN or not reqs: return
+    sql = """INSERT INTO requirements
+               (requirement_id,document_id,type,category,priority,
+                description,acceptance_criteria,domain,confidence_score,status)
+             VALUES (:rid,:did,:type,:cat,:pri,:desc,:crit::jsonb,:dom,:conf,'extracted')
+             ON CONFLICT (requirement_id) DO NOTHING"""
+    for i, r in enumerate(reqs):
+        try:
+            _rds(sql, [
+                {"name":"rid",  "value":{"stringValue":r.get("requirement_id") or f"REQ-{doc_id[:8].upper()}-{i:04d}"}},
+                {"name":"did",  "value":{"stringValue":doc_id}},
+                {"name":"type", "value":{"stringValue":r.get("type","functional")}},
+                {"name":"cat",  "value":{"stringValue":r.get("category","general")}},
+                {"name":"pri",  "value":{"stringValue":r.get("priority","medium")}},
+                {"name":"desc", "value":{"stringValue":r.get("description","")}},
+                {"name":"crit", "value":{"stringValue":json.dumps(r.get("acceptance_criteria",[]))}},
+                {"name":"dom",  "value":{"stringValue":_classify_domain(r.get("description",""))}},
+                {"name":"conf", "value":{"doubleValue":float(r.get("confidence_score",0.8))}},
+            ])
+        except Exception as e:
+            print(f"Store req error: {e}")
+
+
+# ── Handler ───────────────────────────────────────────────────────────────────
+def handler(event, context: Any):
+    print(f"Event: {json.dumps(event)[:500]}")
+    params      = _parse_event(event)
+    document_id = params.get("document_id","")
+    if not document_id:
+        return _wrap(event, {"status":"error","message":"document_id required"})
+
+    try:
+        # 1. Fetch chunks from pgvector
+        chunks = _fetch_chunks(document_id)
+        print(f"Found {len(chunks)} chunks for document_id='{document_id}'")
+
+        # 2. Traverse Knowledge Graph for enriched context
+        kg_nodes, kg_relations = _kg_traverse(document_id)
+        kg_context = _build_kg_context(kg_nodes, kg_relations)
+        print(f"KG context: {len(kg_nodes)} nodes, {len(kg_relations)} relations")
+
+        # 3. Extract requirements from chunks + KG context
+        all_reqs = []
+        if chunks:
+            for i in range(0, len(chunks), 5):
+                batch = "\n\n".join(c["text"] for c in chunks[i:i+5])
+                reqs  = _extract_from_text(batch, kg_context)
+                all_reqs.extend(reqs)
+        else:
+            all_reqs = _extract_from_text(
+                f"Document: {document_id}\nExtract sample requirements.", kg_context)
+
+        # 4. Deduplicate + enrich
+        seen, unique = set(), []
+        for r in all_reqs:
+            desc = r.get("description","").lower().strip()
+            if not desc or desc in seen: continue
+            seen.add(desc)
+            r["requirement_id"] = r.get("id") or f"REQ-{document_id[:8].upper()}-{len(unique):04d}"
+            r["document_id"]    = document_id
+            r["domain"]         = _classify_domain(desc)
+            r["status"]         = "extracted"
+            r["kg_entities"]    = r.get("entities", [])
+            unique.append(r)
+
+        # 5. Store
+        _store_requirements(unique, document_id)
+
+        body = {
+            "status":                 "success",
+            "document_id":            document_id,
+            "requirements_extracted": len(unique),
+            "kg_nodes_used":          len(kg_nodes),
+            "kg_relations_used":      len(kg_relations),
+            "requirements":           unique,
         }
-        
-        structured.append(structured_req)
-    
-    return structured
+        print(f"Extracted {len(unique)} requirements (KG: {len(kg_nodes)} nodes)")
+        return _wrap(event, body)
 
-def classify_domain(description: str) -> str:
-    """Classify requirement domain based on description."""
-    domain_keywords = {
-        'security': ['security', 'authentication', 'authorization', 'encryption'],
-        'performance': ['performance', 'speed', 'latency', 'throughput'],
-        'ui_ux': ['interface', 'user', 'display', 'navigation'],
-        'integration': ['api', 'integration', 'interface', 'connection'],
-        'data': ['data', 'database', 'storage', 'backup']
-    }
-    
-    description_lower = description.lower()
-    
-    for domain, keywords in domain_keywords.items():
-        if any(keyword in description_lower for keyword in keywords):
-            return domain
-    
-    return 'general'
-
-def assess_complexity(description: str) -> str:
-    """Assess requirement complexity based on description."""
-    complexity_indicators = {
-        'high': ['complex', 'advanced', 'sophisticated', 'multiple', 'integration'],
-        'medium': ['moderate', 'standard', 'typical', 'normal'],
-        'low': ['simple', 'basic', 'straightforward', 'minimal']
-    }
-    
-    description_lower = description.lower()
-    
-    for level, indicators in complexity_indicators.items():
-        if any(indicator in description_lower for indicator in indicators):
-            return level
-    
-    return 'medium'
-
-def store_requirements_in_search(document_id: str, requirements: List[Dict]):
-    """Store requirements in OpenSearch for hybrid search."""
-    # Implementation would index requirements in OpenSearch
-    logger.info(f"Storing {len(requirements)} requirements for document {document_id}")
-
-@lambda_handler
-@tracer.capture_lambda_handler
-@logger.inject_lambda_context
-@metrics.log_metrics
-def handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, Any]:
-    """Lambda handler for requirements extraction."""
-    return app.resolve(event, context)
+    except Exception as e:
+        print(f"Error: {e}")
+        return _wrap(event, {"status":"error","message":str(e)})

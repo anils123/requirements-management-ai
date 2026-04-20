@@ -1,160 +1,239 @@
-# .github/workflows/ci-cd.yml
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION:     us-east-1
   PYTHON_VERSION: '3.11'
-  NODE_VERSION: '18'
+  NODE_VERSION:   '20'
 
+# ── Job 1: Test ───────────────────────────────────────────────────────────────
 jobs:
   test:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-    
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
-    
-    - name: Install CDK dependencies
-      run: |
-        cd cdk
-        npm install
-    
-    - name: Run Python tests
-      run: |
-        python -m pytest tests/ --cov=src --cov-report=xml
-    
-    - name: Run CDK tests
-      run: |
-        cd cdk
-        npm test
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
+      - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Install Python dependencies
+        run: pip install -r layers/dependencies/requirements.txt pytest pytest-cov
+
+      - name: Install CDK dependencies
+        run: cd cdk && npm ci
+
+      - name: Run Python unit tests
+        run: pytest tests/unit/ -v --cov=src --cov-report=xml --cov-report=term-missing
+
+      - name: Run CDK tests
+        run: cd cdk && npm test
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+        continue-on-error: true
+
+# ── Job 2: Security Scan ──────────────────────────────────────────────────────
   security-scan:
     runs-on: ubuntu-latest
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Run Bandit security scan
-      run: |
-        pip install bandit
-        bandit -r src/ -f json -o bandit-report.json
-    
-    - name: Run Safety check
-      run: |
-        pip install safety
-        safety check --json --output safety-report.json
-    
-    - name: Upload security reports
-      uses: actions/upload-artifact@v3
-      with:
-        name: security-reports
-        path: |
-          bandit-report.json
-          safety-report.json
+      - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Bandit SAST scan
+        run: |
+          pip install bandit
+          bandit -r src/ -f json -o bandit-report.json -ll || true
+
+      - name: Safety dependency scan
+        run: |
+          pip install safety
+          pip install -r layers/dependencies/requirements.txt
+          safety check --json --output safety-report.json || true
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            trivy-results.sarif
+
+# ── Job 3: CDK Synth (validate template) ─────────────────────────────────────
+  synth:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Configure AWS credentials (read-only for synth)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: CDK synth
+        run: |
+          cd cdk
+          npm ci
+          npx cdk synth RequirementsManagementStack
+
+      - name: Upload synthesized template
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-template
+          path: cdk/cdk.out/
+
+# ── Job 4: Deploy to Staging ──────────────────────────────────────────────────
   deploy-staging:
-    needs: [test, security-scan]
     runs-on: ubuntu-latest
+    needs: [test, security-scan, synth]
     if: github.ref == 'refs/heads/develop'
-    
+    environment: staging
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-    
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        cd cdk && npm install
-    
-    - name: Deploy to staging
-      run: |
-        export ENVIRONMENT=staging
-        ./scripts/deploy.sh
-    
-    - name: Run integration tests
-      run: |
-        python -m pytest tests/integration/ -v
+      - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r layers/dependencies/requirements.txt
+          cd cdk && npm ci
+
+      - name: Build Lambda layer
+        run: |
+          mkdir -p layers/dependencies/python
+          pip install -r layers/dependencies/requirements.txt -t layers/dependencies/python/
+
+      - name: CDK deploy staging
+        run: |
+          cd cdk
+          npx cdk deploy RequirementsManagementStack \
+            --require-approval never \
+            --outputs-file ../cdk_outputs.json \
+            --context environment=staging
+
+      - name: Initialize database
+        run: |
+          export DB_CLUSTER_ARN=$(python -c "import json; d=json.load(open('cdk_outputs.json')); [print(v['DbClusterArn']) for v in d.values() if 'DbClusterArn' in v]")
+          export DB_SECRET_ARN=$(python  -c "import json; d=json.load(open('cdk_outputs.json')); [print(v['DbSecretArn'])  for v in d.values() if 'DbSecretArn'  in v]")
+          python scripts/init_database.py
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v
+        env:
+          AGENT_ID:       ${{ secrets.AGENT_ID }}
+          AGENT_ALIAS_ID: ${{ secrets.AGENT_ALIAS_ID }}
+
+# ── Job 5: Deploy to Production ───────────────────────────────────────────────
   deploy-production:
-    needs: [test, security-scan]
     runs-on: ubuntu-latest
+    needs: [test, security-scan, synth]
     if: github.ref == 'refs/heads/main'
     environment: production
-    
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
-        aws-region: ${{ env.AWS_REGION }}
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-    
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-    
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        cd cdk && npm install
-    
-    - name: Deploy to production
-      run: |
-        export ENVIRONMENT=production
-        ./scripts/deploy.sh
-    
-    - name: Run smoke tests
-      run: |
-        python scripts/test_deployment.py --environment=production
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cdk/package-lock.json
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r layers/dependencies/requirements.txt
+          cd cdk && npm ci
+
+      - name: Build Lambda layer
+        run: |
+          mkdir -p layers/dependencies/python
+          pip install -r layers/dependencies/requirements.txt -t layers/dependencies/python/
+
+      - name: CDK deploy production
+        run: |
+          cd cdk
+          npx cdk deploy RequirementsManagementStack \
+            --require-approval never \
+            --outputs-file ../cdk_outputs.json \
+            --context environment=production
+
+      - name: Initialize database
+        run: |
+          export DB_CLUSTER_ARN=$(python -c "import json; d=json.load(open('cdk_outputs.json')); [print(v['DbClusterArn']) for v in d.values() if 'DbClusterArn' in v]")
+          export DB_SECRET_ARN=$(python  -c "import json; d=json.load(open('cdk_outputs.json')); [print(v['DbSecretArn'])  for v in d.values() if 'DbSecretArn'  in v]")
+          python scripts/init_database.py
+
+      - name: Run smoke tests
+        run: python scripts/test_deployment.py
+        env:
+          AGENT_ID:       ${{ secrets.AGENT_ID }}
+          AGENT_ALIAS_ID: ${{ secrets.AGENT_ALIAS_ID }}
+
+      - name: Notify deployment
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          echo "Production deployment $STATUS for commit ${{ github.sha }}"

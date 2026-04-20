@@ -1,1 +1,68 @@
-[]
+[
+  {
+    "expert_id": "EXP-001",
+    "name": "<Expert Name>",
+    "email": "<expert.email@company.com>",
+    "department": "Cybersecurity",
+    "skills": ["penetration testing", "SIEM", "zero trust", "PKI", "OAuth2", "GDPR"],
+    "specializations": ["security", "compliance", "authentication", "encryption"],
+    "current_workload": 2,
+    "max_workload": 10,
+    "availability_status": "available"
+  },
+  {
+    "expert_id": "EXP-002",
+    "name": "<Expert Name>",
+    "email": "<expert.email@company.com>",
+    "department": "Platform Engineering",
+    "skills": ["AWS", "Kubernetes", "Terraform", "CI/CD", "SRE", "observability"],
+    "specializations": ["infrastructure", "performance", "scalability", "deployment"],
+    "current_workload": 4,
+    "max_workload": 10,
+    "availability_status": "available"
+  },
+  {
+    "expert_id": "EXP-003",
+    "name": "<Expert Name>",
+    "email": "<expert.email@company.com>",
+    "department": "Data Engineering",
+    "skills": ["PostgreSQL", "Spark", "Kafka", "data modelling", "ETL", "data governance"],
+    "specializations": ["data", "integration", "storage", "backup"],
+    "current_workload": 3,
+    "max_workload": 10,
+    "availability_status": "available"
+  },
+  {
+    "expert_id": "EXP-004",
+    "name": "<Expert Name>",
+    "email": "<expert.email@company.com>",
+    "department": "API & Integration",
+    "skills": ["REST", "GraphQL", "gRPC", "event-driven", "microservices", "OpenAPI"],
+    "specializations": ["integration", "api", "protocol", "connector"],
+    "current_workload": 5,
+    "max_workload": 10,
+    "availability_status": "available"
+  },
+  {
+    "expert_id": "EXP-005",
+    "name": "<Expert Name>",
+    "email": "<expert.email@company.com>",
+    "department": "UX & Accessibility",
+    "skills": ["WCAG 2.1", "user research", "Figma", "usability testing", "design systems"],
+    "specializations": ["ui_ux", "accessibility", "usability", "display"],
+    "current_workload": 1,
+    "max_workload": 10,
+    "availability_status": "available"
+  },
+  {
+    "expert_id": "EXP-006",
+    "name": "<Expert Name>",
+    "email": "<expert.email@company.com>",
+    "department": "Regulatory & Compliance",
+    "skills": ["ISO 27001", "SOC 2", "GDPR", "NIS2", "risk assessment", "audit"],
+    "specializations": ["compliance", "regulation", "standard", "audit"],
+    "current_workload": 3,
+    "max_workload": 10,
+    "availability_status": "available"
+  }
+]

@@ -1,4 +1,4 @@
-cat > cdk/tsconfig.json << 'EOF'
+
 {
   "compilerOptions": {
     "target": "ES2020",
@@ -26,7 +26,8 @@ cat > cdk/tsconfig.json << 'EOF'
   },
   "exclude": [
     "node_modules",
-    "cdk.out"
+    "cdk.out",
+    "test"
   ]
 }
-EOF
+

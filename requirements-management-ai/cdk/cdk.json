@@ -1,4 +1,4 @@
-cat > cdk/cdk.json << 'EOF'
+
 {
   "app": "npx ts-node --prefer-ts-exts bin/requirements-management.ts",
   "watch": {
@@ -63,4 +63,4 @@ cat > cdk/cdk.json << 'EOF'
     "@aws-cdk/aws-codepipeline-actions:useNewDefaultBranchForSourceAction": true
   }
 }
-EOF
+

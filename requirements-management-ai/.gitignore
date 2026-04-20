@@ -48,6 +48,13 @@ ENV/
 ehthumbs.db
 Thumbs.db
 
+# Secrets & sensitive outputs
+.env.secrets
+cdk_outputs.json
+agent_id.txt
+agent_alias_id.txt
+.secrets.baseline
+
 # AWS
 .aws/
 *.pem

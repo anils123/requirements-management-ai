@@ -2,12 +2,86 @@ name: Security Scan
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, develop]
+  schedule:
+    - cron: '0 6 * * 1'   # Every Monday 06:00 UTC
 
 jobs:
-  scan:
+  sast:
+    name: SAST & Dependency Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run security scanner
-        run: echo "Add security scanning steps (Snyk/Trivy)"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install scanner tools
+        run: pip install bandit safety detect-secrets
+
+      - name: Bandit — Python SAST
+        run: |
+          bandit -r src/ scripts/ \
+            -f json -o bandit-report.json \
+            --severity-level medium \
+            --confidence-level medium || true
+          bandit -r src/ scripts/ --severity-level high --confidence-level high
+
+      - name: Safety — dependency CVE check
+        run: |
+          pip install -r layers/dependencies/requirements.txt
+          safety check --full-report --json --output safety-report.json || true
+
+      - name: detect-secrets — credential leak scan
+        run: |
+          detect-secrets scan --baseline .secrets.baseline \
+            --exclude-files '.*\.json$' \
+            --exclude-files 'cdk\.out/.*' || true
+
+      - name: Trivy — filesystem vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type:    fs
+          scan-ref:     .
+          severity:     HIGH,CRITICAL
+          format:       sarif
+          output:       trivy-results.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Upload all reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ github.run_number }}
+          path: |
+            bandit-report.json
+            safety-report.json
+            trivy-results.sarif
+
+  iac-scan:
+    name: IaC Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkov — CDK/CloudFormation IaC scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory:       cdk/
+          framework:       cloudformation
+          output_format:   sarif
+          output_file_path: checkov-results.sarif
+          soft_fail:       true
+
+      - name: Upload IaC scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: iac-scan-results-${{ github.run_number }}
+          path: checkov-results.sarif
+        continue-on-error: true
