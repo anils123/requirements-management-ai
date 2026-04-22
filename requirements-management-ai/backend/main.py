@@ -25,8 +25,8 @@ REGION         = "us-east-1"
 AGENT_ID       = open(os.path.join(ROOT, "agent_id.txt")).read().strip()
 ALIAS_ID       = open(os.path.join(ROOT, "agent_alias_id.txt")).read().strip()
 BUCKET_NAME    = (OUT.get("DocumentBucketName") or
-                  OUT.get("ExportsOutputFnGetAttDocumentBucketAE41E5A9ArnF6A03022","")
-                  .replace("arn:aws:s3:::","")).strip()
+                  OUT.get("ExportsOutputFnGetAttDocumentBucketAE41E5A9ArnF6A03022", "")
+                  .replace("arn:aws:s3:::", "")).strip()
 DB_CLUSTER_ARN = OUT["DbClusterArn"]
 DB_SECRET_ARN  = OUT["DbSecretArn"]
 
@@ -50,7 +50,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Pydantic models ───────────────────────────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────────────────────
 class AgentRequest(BaseModel):
     session_id: str
     input_text: str
@@ -76,7 +76,7 @@ class ComplianceRequest(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _invoke(fn_name: str, action_group: str, api_path: str, properties: list) -> dict:
-    """Invoke a Lambda with Bedrock agent event format and unwrap the response."""
+    """Invoke Lambda with Bedrock agent event format and unwrap response."""
     payload = {
         "actionGroup": action_group,
         "apiPath":     api_path,
@@ -85,13 +85,8 @@ def _invoke(fn_name: str, action_group: str, api_path: str, properties: list) ->
     }
     resp   = lam.invoke(FunctionName=fn_name, Payload=json.dumps(payload))
     result = json.loads(resp["Payload"].read())
-
-    # Unwrap Lambda error
     if "errorMessage" in result:
         raise HTTPException(status_code=500, detail=result["errorMessage"])
-
-    # Unwrap Bedrock agent envelope:
-    # result -> response -> responseBody -> application/json -> body (JSON string)
     try:
         body_str = (result.get("response", {})
                           .get("responseBody", {})
@@ -100,6 +95,12 @@ def _invoke(fn_name: str, action_group: str, api_path: str, properties: list) ->
         return json.loads(body_str)
     except Exception:
         return result
+
+def _rds_json(sql, params=None):
+    kw = dict(resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
+              database="requirements_db", sql=sql, formatRecordsAs="JSON")
+    if params: kw["parameters"] = params
+    return json.loads(rds.execute_statement(**kw).get("formattedRecords", "[]"))
 
 
 # =============================================================================
@@ -126,13 +127,12 @@ async def invoke_agent(req: AgentRequest):
                 if "chunk" in event:
                     yield f"data: {json.dumps({'text': event['chunk']['bytes'].decode()})}\n\n"
                 if "trace" in event:
-                    trace = event["trace"].get("trace", {})
-                    for r in trace.get("retrievalTrace", {}).get("retrievalResults", []):
+                    for r in event["trace"].get("trace", {}).get("retrievalTrace", {}).get("retrievalResults", []):
                         citations.append({
-                            "source":          r.get("location",{}).get("s3Location",{}).get("uri",""),
-                            "chunk_id":        r.get("metadata",{}).get("chunk_id", 0),
+                            "source":          r.get("location", {}).get("s3Location", {}).get("uri", ""),
+                            "chunk_id":        r.get("metadata", {}).get("chunk_id", 0),
                             "relevance_score": r.get("score", 0.0),
-                            "text_snippet":    r.get("content",{}).get("text","")[:200],
+                            "text_snippet":    r.get("content", {}).get("text", "")[:200],
                         })
             if citations:
                 yield f"data: {json.dumps({'citations': citations})}\n\n"
@@ -151,7 +151,7 @@ async def invoke_agent(req: AgentRequest):
 # =============================================================================
 @app.post("/api/documents/upload")
 async def upload_document(file: UploadFile = File(...)):
-    """Upload file directly to S3."""
+    """Upload file to S3."""
     try:
         key     = f"bids/{file.filename}"
         content = await file.read()
@@ -164,7 +164,7 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.post("/api/documents")
 async def process_document(req: ProcessDocRequest):
-    """Trigger DocumentProcessor Lambda."""
+    """Trigger DocumentProcessor Lambda — extracts text, embeddings, KG."""
     try:
         return _invoke(DOC_PROCESSOR_FN, "DocumentProcessor", "/process-document", [
             {"name": "document_path", "value": req.document_path},
@@ -174,6 +174,30 @@ async def process_document(req: ProcessDocRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents")
+async def list_documents():
+    """List all documents from Aurora document_chunks table."""
+    try:
+        rows = _rds_json(
+            "SELECT document_path, COUNT(*) as chunk_count, MAX(created_at) as last_updated "
+            "FROM document_chunks GROUP BY document_path ORDER BY MAX(created_at) DESC"
+        )
+        return {
+            "documents": [{
+                "id":          r["document_path"],
+                "name":        r["document_path"].split("/")[-1],
+                "s3_key":      r["document_path"],
+                "status":      "ready",
+                "chunks":      r["chunk_count"],
+                "uploaded_at": str(r.get("last_updated", "")),
+                "size_bytes":  0,
+            } for r in rows],
+            "total": len(rows),
+        }
+    except Exception as e:
+        return {"documents": [], "total": 0, "error": str(e)}
 
 
 # =============================================================================
@@ -197,16 +221,11 @@ async def extract_requirements(req: ExtractRequest):
 async def get_requirements():
     """Fetch all requirements from Aurora."""
     try:
-        resp    = rds.execute_statement(
-            resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
-            database="requirements_db",
-            sql=("SELECT requirement_id, document_id, type, category, priority, "
-                 "description, domain, status, confidence_score, acceptance_criteria "
-                 "FROM requirements ORDER BY created_at DESC LIMIT 200"),
-            formatRecordsAs="JSON",
+        records = _rds_json(
+            "SELECT requirement_id, document_id, type, category, priority, "
+            "description, domain, status, confidence_score, acceptance_criteria "
+            "FROM requirements ORDER BY document_id, requirement_id LIMIT 500"
         )
-        records = json.loads(resp.get("formattedRecords", "[]"))
-        # Parse acceptance_criteria JSON string
         for r in records:
             if isinstance(r.get("acceptance_criteria"), str):
                 try:    r["acceptance_criteria"] = json.loads(r["acceptance_criteria"])
@@ -216,6 +235,36 @@ async def get_requirements():
         return {"requirements": records, "total": len(records)}
     except Exception as e:
         return {"requirements": [], "total": 0, "error": str(e)}
+
+
+# =============================================================================
+# Search
+# =============================================================================
+@app.post("/api/search")
+async def search_documents(req: dict):
+    """Semantic search across all uploaded PDFs."""
+    try:
+        payload = {
+            "actionGroup": "DocumentSearch",
+            "apiPath":     "/search",
+            "httpMethod":  "POST",
+            "requestBody": {"content": {"application/json": {"properties": [
+                {"name": "action",          "value": req.get("action", "search")},
+                {"name": "query",           "value": req.get("query", "")},
+                {"name": "document_filter", "value": req.get("document_filter", "")},
+                {"name": "top_k",           "value": str(req.get("top_k", 8))},
+            ]}}},
+        }
+        resp   = lam.invoke(FunctionName="DocumentSearch", Payload=json.dumps(payload))
+        result = json.loads(resp["Payload"].read())
+        try:
+            body_str = (result.get("response", {}).get("responseBody", {})
+                              .get("application/json", {}).get("body", "{}"))
+            return json.loads(body_str)
+        except Exception:
+            return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
@@ -238,15 +287,11 @@ async def assign_experts(req: ExpertRequest):
 async def get_experts():
     """Fetch all experts from Aurora."""
     try:
-        resp    = rds.execute_statement(
-            resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
-            database="requirements_db",
-            sql=("SELECT expert_id, name, email, department, skills, specializations, "
-                 "current_workload, max_workload, availability_status "
-                 "FROM domain_experts ORDER BY current_workload ASC"),
-            formatRecordsAs="JSON",
+        records = _rds_json(
+            "SELECT expert_id, name, email, department, skills, specializations, "
+            "current_workload, max_workload, availability_status "
+            "FROM domain_experts ORDER BY current_workload ASC"
         )
-        records = json.loads(resp.get("formattedRecords", "[]"))
         for r in records:
             for field in ("skills", "specializations"):
                 if isinstance(r.get(field), str):
@@ -280,70 +325,22 @@ async def check_compliance(req: ComplianceRequest):
 # =============================================================================
 @app.get("/api/knowledge-graph")
 async def get_knowledge_graph(document_id: str = "", limit: int = 100):
-    """Return KG nodes and edges, optionally filtered by document."""
+    """Return KG nodes and edges."""
     try:
-        where = "WHERE document_path LIKE :doc" if document_id else ""
-        params_n = [{"name":"doc","value":{"stringValue":f"%{document_id}%"}}] if document_id else None
-
-        r_nodes = rds.execute_statement(
-            resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
-            database="requirements_db",
-            sql=f"SELECT entity_id,entity_text,entity_type,score FROM kg_nodes {where} ORDER BY score DESC LIMIT {limit}",
-            **({"parameters":params_n} if params_n else {}),
-            formatRecordsAs="JSON",
-        )
-        nodes = json.loads(r_nodes.get("formattedRecords","[]"))
-
-        r_edges = rds.execute_statement(
-            resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
-            database="requirements_db",
-            sql=f"SELECT e.edge_id,n1.entity_text,e.predicate,n2.entity_text FROM kg_edges e JOIN kg_nodes n1 ON e.subject_id=n1.entity_id JOIN kg_nodes n2 ON e.object_id=n2.entity_id {where.replace('document_path','e.document_path')} LIMIT {limit}",
-            **({"parameters":params_n} if params_n else {}),
-            formatRecordsAs="JSON",
-        )
-        edges = json.loads(r_edges.get("formattedRecords","[]"))
-
+        where    = "WHERE document_path LIKE :doc" if document_id else ""
+        params_n = [{"name": "doc", "value": {"stringValue": f"%{document_id}%"}}] if document_id else None
+        nodes    = _rds_json(
+            f"SELECT entity_id,entity_text,entity_type,score FROM kg_nodes {where} "
+            f"ORDER BY score DESC LIMIT {limit}", params_n)
+        edges    = _rds_json(
+            f"SELECT e.edge_id,n1.entity_text,e.predicate,n2.entity_text "
+            f"FROM kg_edges e JOIN kg_nodes n1 ON e.subject_id=n1.entity_id "
+            f"JOIN kg_nodes n2 ON e.object_id=n2.entity_id "
+            f"{where.replace('document_path','e.document_path')} LIMIT {limit}", params_n)
         return {"nodes": nodes, "edges": edges,
                 "node_count": len(nodes), "edge_count": len(edges)}
     except Exception as e:
         return {"nodes": [], "edges": [], "error": str(e)}
-
-
-# =============================================================================
-# Document Registry
-# =============================================================================
-@app.get("/api/documents/registry")
-async def get_document_registry():
-    """Return all documents from the registry with processing status."""
-    try:
-        resp    = rds.execute_statement(
-            resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
-            database="requirements_db",
-            sql=("SELECT document_path,document_name,chunk_count,text_length,"
-                 "kb_synced,processing_status,uploaded_at,processed_at "
-                 "FROM document_registry ORDER BY uploaded_at DESC LIMIT 100"),
-            formatRecordsAs="JSON",
-        )
-        return {"documents": json.loads(resp.get("formattedRecords","[]"))}
-    except Exception as e:
-        return {"documents": [], "error": str(e)}
-
-
-# =============================================================================
-# KB Sync status
-# =============================================================================
-@app.post("/api/kb/sync")
-async def sync_kb(req: ProcessDocRequest):
-    """Manually trigger KB ingestion for a document."""
-    try:
-        return _invoke(DOC_PROCESSOR_FN, "DocumentProcessor", "/process-document", [
-            {"name": "document_path", "value": req.document_path},
-            {"name": "document_type", "value": req.document_type},
-        ])
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================
@@ -353,12 +350,9 @@ async def sync_kb(req: ProcessDocRequest):
 async def get_stats():
     try:
         def q(sql):
-            r = rds.execute_statement(
-                resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
-                database="requirements_db", sql=sql,
-            )
+            r = rds.execute_statement(resourceArn=DB_CLUSTER_ARN, secretArn=DB_SECRET_ARN,
+                                      database="requirements_db", sql=sql)
             return r["records"][0][0].get("longValue", 0) if r.get("records") else 0
-
         return {
             "total_documents":    q("SELECT COUNT(DISTINCT document_path) FROM document_chunks"),
             "total_requirements": q("SELECT COUNT(*) FROM requirements"),
@@ -385,7 +379,7 @@ async def health():
 
 
 # =============================================================================
-# Serve React frontend (production build)
+# Serve React frontend (production)
 # =============================================================================
 frontend_dist = os.path.join(ROOT, "frontend", "dist")
 if os.path.exists(frontend_dist):

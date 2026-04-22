@@ -14,7 +14,9 @@ interface UploadFile {
 
 function uid() { return Math.random().toString(36).slice(2) }
 
-export function DocumentUpload() {
+interface Props { onUploaded?: () => void }
+
+export function DocumentUpload({ onUploaded }: Props) {
   const [files, setFiles] = useState<UploadFile[]>([])
   const { addDocument }   = useStore()
 
@@ -45,17 +47,36 @@ export function DocumentUpload() {
         f.id === uf.id ? { ...f, status: 'processing', progress: 60 } : f
       ))
 
-      // Step 2: Trigger document processing (Textract + embeddings)
+      // Trigger document processing and WAIT for it to complete
+      // This is synchronous - Lambda runs up to 15 min, we wait for chunks to be stored
       const processResp = await fetch('/api/documents', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           document_path: s3Key,
-          document_type: uf.file.name.endsWith('.pdf') ? 'pdf' : 'txt',
+          document_type: uf.file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'txt',
         }),
       })
 
       const processResult = processResp.ok ? await processResp.json() : {}
+      const chunksCreated = processResult?.chunks_created ?? 0
+      console.log('Process result:', processResult)
+
+      // If no chunks were created, the PDF may need more time - retry once
+      if (chunksCreated === 0 && processResp.ok) {
+        console.log('No chunks on first attempt, retrying...')
+        await new Promise((r) => setTimeout(r, 3000))
+        const retryResp = await fetch('/api/documents', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            document_path: s3Key,
+            document_type: uf.file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'txt',
+          }),
+        })
+        const retryResult = retryResp.ok ? await retryResp.json() : {}
+        Object.assign(processResult, retryResult)
+      }
 
       setFiles((prev) => prev.map((f) =>
         f.id === uf.id ? { ...f, status: 'done', progress: 100 } : f
@@ -63,7 +84,7 @@ export function DocumentUpload() {
 
       // Add to store with the S3 key as the document ID for extraction
       addDocument({
-        id:          s3Key,                          // use s3_key as ID so Extract works
+        id:          s3Key,
         name:        uf.file.name,
         s3_key:      s3Key,
         status:      'ready',
@@ -72,6 +93,7 @@ export function DocumentUpload() {
         uploaded_at: new Date().toISOString(),
         size_bytes:  uf.file.size,
       })
+      onUploaded?.()  // refresh parent document list
 
     } catch (err: any) {
       console.error('Upload error:', err)

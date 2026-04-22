@@ -171,26 +171,50 @@ Rules:
 
 def _store_requirements(reqs, doc_id):
     if not DB_ARN or not reqs: return
+    # DELETE existing requirements for this document first, then re-insert
+    # This ensures fresh extraction always replaces stale data
+    try:
+        _rds("DELETE FROM requirements WHERE document_id = :did",
+             [{"name":"did","value":{"stringValue":doc_id}}])
+        print(f"Cleared existing requirements for {doc_id}")
+    except Exception as e:
+        print(f"Clear error (ok if first time): {e}")
+
     sql = """INSERT INTO requirements
                (requirement_id,document_id,type,category,priority,
                 description,acceptance_criteria,domain,confidence_score,status)
              VALUES (:rid,:did,:type,:cat,:pri,:desc,:crit::jsonb,:dom,:conf,'extracted')
-             ON CONFLICT (requirement_id) DO NOTHING"""
+             ON CONFLICT (requirement_id) DO UPDATE SET
+               description=EXCLUDED.description,
+               document_id=EXCLUDED.document_id,
+               type=EXCLUDED.type,
+               priority=EXCLUDED.priority,
+               domain=EXCLUDED.domain,
+               confidence_score=EXCLUDED.confidence_score,
+               status='extracted',
+               updated_at=NOW()"""
+    stored = 0
     for i, r in enumerate(reqs):
         try:
+            # Use document-scoped ID: REQ-DOCNAME-0001 to avoid cross-document conflicts
+            doc_prefix = doc_id[:12].upper().replace(' ','-').replace('/','-')
+            req_id = f"REQ-{doc_prefix}-{i:04d}"
             _rds(sql, [
-                {"name":"rid",  "value":{"stringValue":r.get("requirement_id") or f"REQ-{doc_id[:8].upper()}-{i:04d}"}},
-                {"name":"did",  "value":{"stringValue":doc_id}},
-                {"name":"type", "value":{"stringValue":r.get("type","functional")}},
-                {"name":"cat",  "value":{"stringValue":r.get("category","general")}},
-                {"name":"pri",  "value":{"stringValue":r.get("priority","medium")}},
-                {"name":"desc", "value":{"stringValue":r.get("description","")}},
-                {"name":"crit", "value":{"stringValue":json.dumps(r.get("acceptance_criteria",[]))}},
-                {"name":"dom",  "value":{"stringValue":_classify_domain(r.get("description",""))}},
-                {"name":"conf", "value":{"doubleValue":float(r.get("confidence_score",0.8))}},
+                {"name":"rid",  "value":{"stringValue": req_id}},
+                {"name":"did",  "value":{"stringValue": doc_id}},
+                {"name":"type", "value":{"stringValue": r.get("type","functional")}},
+                {"name":"cat",  "value":{"stringValue": r.get("category","general")}},
+                {"name":"pri",  "value":{"stringValue": r.get("priority","medium")}},
+                {"name":"desc", "value":{"stringValue": r.get("description","")}},
+                {"name":"crit", "value":{"stringValue": json.dumps(r.get("acceptance_criteria",[]))}},
+                {"name":"dom",  "value":{"stringValue": _classify_domain(r.get("description",""))}},
+                {"name":"conf", "value":{"doubleValue": float(r.get("confidence_score",0.8))}},
             ])
+            r["requirement_id"] = req_id
+            stored += 1
         except Exception as e:
             print(f"Store req error: {e}")
+    print(f"Stored {stored}/{len(reqs)} requirements for {doc_id}")
 
 
 # ── Handler ───────────────────────────────────────────────────────────────────

@@ -2,8 +2,8 @@ import axios from 'axios'
 import type { Document, Requirement, Expert, SystemStats } from '../types'
 
 const API_BASE    = '/api'
-const AGENT_ID    = 'XGZGU5FPEV'
-const ALIAS_ID    = 'KQLWF160XN'
+const AGENT_ID    = 'RKKSDKKZ08'
+const ALIAS_ID    = 'CGRJYRD83U'
 const BUCKET_NAME = 'requirementsmanagementstack-documentbucketae41e5a9-v7g01d4l2urm'
 const REGION      = 'us-east-1'
 

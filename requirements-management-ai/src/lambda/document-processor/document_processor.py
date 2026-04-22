@@ -51,10 +51,13 @@ def _wrap(event, body):
 def _extract_text(document_path):
     if not BUCKET:
         return ""
-    if document_path.lower().endswith((".txt",".md",".csv")):
+
+    # Text files — read directly
+    if document_path.lower().endswith((".txt", ".md", ".csv")):
         obj = s3.get_object(Bucket=BUCKET, Key=document_path)
         return obj["Body"].read().decode("utf-8", errors="ignore")
-    # PDF via Textract
+
+    # PDF — try Textract async first, fall back to pypdf
     try:
         job_id = textract.start_document_text_detection(
             DocumentLocation={"S3Object":{"Bucket":BUCKET,"Name":document_path}}
@@ -72,14 +75,52 @@ def _extract_text(document_path):
             lines.extend(b["Text"] for b in pg.get("Blocks",[]) if b["BlockType"]=="LINE")
             nxt = pg.get("NextToken")
             if not nxt: break
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        if len(text) > 100:
+            return text
+        raise Exception("Textract returned too little text")
     except Exception as e:
-        print(f"Textract error: {e}, falling back to S3 raw read")
+        print(f"Textract error: {e}, using pypdf fallback")
+
+    # pypdf fallback — works for text-based PDFs without VPC endpoint
+    try:
+        import io
+        from pypdf import PdfReader
+        raw    = s3.get_object(Bucket=BUCKET, Key=document_path)["Body"].read()
+        reader = PdfReader(io.BytesIO(raw))
+        pages  = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                pages.append(text)
+        full_text = "\n".join(pages)
+        print(f"pypdf extracted {len(full_text)} chars from {len(reader.pages)} pages")
+        if len(full_text) > 50:
+            return full_text
+        raise Exception("pypdf returned too little text")
+    except Exception as e:
+        print(f"pypdf error: {e}")
+
+    # Last resort — raw bytes decode (catches text-embedded PDFs)
+    try:
         raw   = s3.get_object(Bucket=BUCKET, Key=document_path)["Body"].read()
-        text  = raw.decode("utf-8", errors="ignore")
-        lines = [l.strip() for l in text.split("\n")
-                 if len(l.strip()) > 10 and l.strip().isprintable()]
-        return "\n".join(lines)
+        text  = raw.decode("latin-1", errors="ignore")
+        # Extract readable text between PDF stream markers
+        import re
+        streams = re.findall(r'BT(.+?)ET', text, re.DOTALL)
+        lines   = []
+        for stream in streams:
+            words = re.findall(r'\(([^)]+)\)', stream)
+            lines.extend(words)
+        extracted = " ".join(lines)
+        if len(extracted) > 50:
+            return extracted
+        # Final fallback: return printable chars
+        printable = " ".join(l.strip() for l in text.split("\n")
+                             if len(l.strip()) > 15 and l.strip().isprintable())
+        return printable
+    except Exception as e:
+        return f"Could not extract text from {document_path}: {e}"
 
 
 # ── Chunking + embedding ──────────────────────────────────────────────────────
@@ -99,7 +140,10 @@ def _store_chunks(chunks, document_path):
     sql = """INSERT INTO document_chunks
                (document_path,chunk_id,text_content,embedding,metadata,created_at)
              VALUES (:p,:c,:t,:e::vector,:m::jsonb,NOW())
-             ON CONFLICT DO NOTHING"""
+             ON CONFLICT (document_path,chunk_id) DO UPDATE SET
+               text_content=EXCLUDED.text_content,
+               embedding=EXCLUDED.embedding,
+               metadata=EXCLUDED.metadata"""
     stored = 0
     for ch in chunks:
         try:

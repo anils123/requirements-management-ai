@@ -47,6 +47,7 @@ LAYER_PACKAGES = [
     "aws-xray-sdk",
     "opensearch-py",
     "requests-aws4auth",
+    "pypdf",
 ]
 
 print("=" * 60)
