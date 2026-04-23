@@ -53,6 +53,7 @@ Thumbs.db
 cdk_outputs.json
 agent_id.txt
 agent_alias_id.txt
+neo4j_config.json
 .secrets.baseline
 
 # AWS

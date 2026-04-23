@@ -1,9 +1,20 @@
 import axios from 'axios'
 import type { Document, Requirement, Expert, SystemStats } from '../types'
 
-const API_BASE    = '/api'
-const AGENT_ID    = 'RKKSDKKZ08'
-const ALIAS_ID    = 'CGRJYRD83U'
+const API_BASE = '/api'
+
+// Agent IDs — fetched dynamically from backend health endpoint
+let AGENT_ID = 'RKKSDKKZ08'
+let ALIAS_ID = 'DSSWEULJAJ'
+
+// Fetch current IDs from backend on startup (handles alias rotations)
+fetch(`${API_BASE}/health`)
+  .then(r => r.json())
+  .then(data => {
+    if (data.agent_id)    AGENT_ID = data.agent_id
+    if (data.alias_id)    ALIAS_ID = data.alias_id
+  })
+  .catch(() => {}) // keep hardcoded fallback if backend unreachable
 const BUCKET_NAME = 'requirementsmanagementstack-documentbucketae41e5a9-v7g01d4l2urm'
 const REGION      = 'us-east-1'
 

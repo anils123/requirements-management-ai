@@ -1,4 +1,4 @@
-import { MessageSquare, FileText, ListChecks, Users, LayoutDashboard, Settings, ChevronLeft, ChevronRight, Zap, FolderOpen } from 'lucide-react'
+import { MessageSquare, FileText, ListChecks, Users, LayoutDashboard, Settings, ChevronLeft, ChevronRight, Zap, FolderOpen, GitBranch } from 'lucide-react'
 import { useStore } from '../store'
 import clsx from 'clsx'
 
@@ -7,6 +7,7 @@ const NAV = [
   { id: 'documents',    label: 'Documents',     icon: FileText },
   { id: 'requirements', label: 'Requirements',  icon: ListChecks },
   { id: 'experts',      label: 'Experts',       icon: Users },
+  { id: 'graph',        label: 'Knowledge Graph', icon: GitBranch },
   { id: 'workspaces',   label: 'Workspaces',    icon: FolderOpen },
   { id: 'admin',        label: 'Admin',         icon: LayoutDashboard },
 ]

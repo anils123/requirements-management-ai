@@ -1,17 +1,19 @@
-import { Sidebar } from './components/Sidebar'
-import { ChatPage } from './pages/ChatPage'
-import { DocumentsPage } from './pages/DocumentsPage'
-import { RequirementsPage } from './pages/RequirementsPage'
-import { ExpertsPage } from './pages/ExpertsPage'
-import { WorkspacesPage } from './pages/WorkspacesPage'
-import { AdminPage } from './pages/AdminPage'
-import { useStore } from './store'
+import { Sidebar }          from './components/Sidebar'
+import { ChatPage }          from './pages/ChatPage'
+import { DocumentsPage }     from './pages/DocumentsPage'
+import { RequirementsPage }  from './pages/RequirementsPage'
+import { ExpertsPage }       from './pages/ExpertsPage'
+import { WorkspacesPage }    from './pages/WorkspacesPage'
+import { AdminPage }         from './pages/AdminPage'
+import { GraphPage }         from './pages/GraphPage'
+import { useStore }          from './store'
 
 const PAGES: Record<string, React.ComponentType> = {
   chat:         ChatPage,
   documents:    DocumentsPage,
   requirements: RequirementsPage,
   experts:      ExpertsPage,
+  graph:        GraphPage,
   workspaces:   WorkspacesPage,
   admin:        AdminPage,
 }
